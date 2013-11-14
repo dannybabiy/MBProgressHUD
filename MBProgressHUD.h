@@ -88,6 +88,8 @@ typedef enum {
 typedef void (^MBProgressHUDCompletionBlock)();
 #endif
 
+// Defining this in the header for accsibility of customView tinting.
+#define iOS7contentTint [UIColor colorWithRed:0/255.0f green:14/255.0f blue:28/255.0f alpha:0.65f]
 
 /** 
  * Displays a simple HUD window containing a progress indicator and two optional labels for short messages.

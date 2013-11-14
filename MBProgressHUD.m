@@ -5,6 +5,7 @@
 //
 
 #import "MBProgressHUD.h"
+#import <QuartzCore/QuartzCore.h>
 
 
 #if __has_feature(objc_arc)
@@ -53,11 +54,14 @@
 #define MB_IF_PRE_IOS7(...)  \
 	if (kCFCoreFoundationVersionNumber < kCFCoreFoundationVersionNumber_iOS_7_0) { __VA_ARGS__ }
 
+#define iOS7blurTint    [UIColor colorWithRed:0/255.0f green:70/255.0f blue:140/255.0f alpha:0.15f]
 
 static const CGFloat kPadding = 4.f;
 static const CGFloat kLabelFontSize = 16.f;
 static const CGFloat kDetailsLabelFontSize = 12.f;
 
+@interface DimmedBackground : UIView
+@end
 
 @interface MBProgressHUD ()
 
@@ -94,6 +98,10 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 	SEL methodForExecution;
 	id targetForExecution;
 	id objectForExecution;
+    UIView *dimmedBackground;
+    UIToolbar *blurryBackground;
+    CALayer *blurryBackgroundTint;
+    UIView *contentContainer;
 	UILabel *label;
 	UILabel *detailsLabel;
 	BOOL isFinished;
@@ -196,11 +204,15 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		self.opacity = 0.8f;
         self.color = nil;
 		self.labelFont = [UIFont boldSystemFontOfSize:kLabelFontSize];
-        MB_IF_PRE_IOS7(self.labelColor = [UIColor whiteColor];)
-		MB_IF_IOS7_OR_GREATER(self.labelColor = [UIColor blackColor];)
+        MB_IF_PRE_IOS7(
+            self.labelColor = [UIColor whiteColor];
+            self.detailsLabelColor = [UIColor whiteColor];
+        )
+		MB_IF_IOS7_OR_GREATER(
+            self.labelColor = iOS7contentTint;
+            self.detailsLabelColor = iOS7contentTint;
+        )
 		self.detailsLabelFont = [UIFont boldSystemFontOfSize:kDetailsLabelFontSize];
-        MB_IF_PRE_IOS7(self.detailsLabelColor = [UIColor whiteColor];)
-		MB_IF_IOS7_OR_GREATER(self.detailsLabelColor = [UIColor blackColor];)
 		self.xOffset = 0.0f;
 		self.yOffset = 0.0f;
 		self.dimBackground = NO;
@@ -219,16 +231,18 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		self.backgroundColor = [UIColor clearColor];
         
         MB_IF_IOS7_OR_GREATER(
-			self.dimBackground = YES;
             self.opacity = 1.f;
+            [self setupBlurryBackground];
         )
 		
 		// Make it invisible for now
-		self.alpha = 0.0f;
+		self.hidden = YES;
 		
 		taskInProgress = NO;
 		rotationTransform = CGAffineTransformIdentity;
-		
+
+        [self setupDimmedBackground];
+        [self setupContentContainer];
 		[self setupLabels];
 		[self updateIndicators];
 		[self registerForKVO];
@@ -339,18 +353,27 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		self.transform = CGAffineTransformConcat(rotationTransform, CGAffineTransformMakeScale(1.5f, 1.5f));
 	}
 	self.showStarted = [NSDate date];
+    self.hidden = NO;
 	// Fade in
 	if (animated) {
 		[UIView beginAnimations:nil context:NULL];
 		[UIView setAnimationDuration:0.30];
-		self.alpha = 1.0f;
+        if (dimBackground) {
+            dimmedBackground.alpha = 1.0f;
+        }
+		contentContainer.alpha = 1.0f;
+        blurryBackground.alpha = 1.0f;
 		if (animationType == MBProgressHUDAnimationZoomIn || animationType == MBProgressHUDAnimationZoomOut) {
 			self.transform = rotationTransform;
 		}
 		[UIView commitAnimations];
 	}
 	else {
-		self.alpha = 1.0f;
+        if (dimBackground) {
+            dimmedBackground.alpha = 1.0f;
+        }
+		contentContainer.alpha = 1.0f;
+        blurryBackground.alpha = 1.0f;
 	}
 }
 
@@ -361,19 +384,20 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		[UIView setAnimationDuration:0.30];
 		[UIView setAnimationDelegate:self];
 		[UIView setAnimationDidStopSelector:@selector(animationFinished:finished:context:)];
-		// 0.02 prevents the hud from passing through touches during the animation the hud will get completely hidden
-		// in the done method
 		if (animationType == MBProgressHUDAnimationZoomIn) {
 			self.transform = CGAffineTransformConcat(rotationTransform, CGAffineTransformMakeScale(1.5f, 1.5f));
 		} else if (animationType == MBProgressHUDAnimationZoomOut) {
 			self.transform = CGAffineTransformConcat(rotationTransform, CGAffineTransformMakeScale(0.5f, 0.5f));
 		}
-
-		self.alpha = 0.02f;
+        dimmedBackground.alpha = 0.0f;
+		contentContainer.alpha = 0.0f;
+        blurryBackground.alpha = 0.0f;
 		[UIView commitAnimations];
 	}
 	else {
-		self.alpha = 0.0f;
+        dimmedBackground.alpha = 0.0f;
+        contentContainer.alpha = 0.0f;
+        blurryBackground.alpha = 0.0f;
 		[self done];
 	}
 	self.showStarted = nil;
@@ -385,7 +409,7 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 
 - (void)done {
 	isFinished = YES;
-	self.alpha = 0.0f;
+    self.hidden = YES;
 	if (removeFromSuperViewOnHide) {
 		[self removeFromSuperview];
 	}
@@ -471,6 +495,36 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 
 #pragma mark - UI
 
+- (void)setupDimmedBackground {
+    dimmedBackground = [[DimmedBackground alloc] initWithFrame:self.bounds];
+    dimmedBackground.opaque = NO;
+    dimmedBackground.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    dimmedBackground.alpha = 0.0f;
+    dimmedBackground.userInteractionEnabled = NO;
+    [self insertSubview:dimmedBackground atIndex:0];
+}
+
+- (void)setupBlurryBackground {
+    // Steal the blur effect from the toolbar.
+    // It doesn't work well if trying to animate alpha of the superview, thus we need to change alpha on it directly.
+    blurryBackground = [[UIToolbar alloc] initWithFrame:CGRectZero];
+    blurryBackground.alpha = 0.0f;
+    blurryBackground.layer.cornerRadius = self.cornerRadius;
+    blurryBackground.layer.masksToBounds = YES;
+    [self addSubview:blurryBackground];
+    // Workaround for the toolbar tint causing a desaturated blur after the 7.0.3 update.
+    blurryBackgroundTint = [CALayer layer];
+    blurryBackgroundTint.backgroundColor = iOS7blurTint.CGColor;
+    [blurryBackground.layer insertSublayer:blurryBackgroundTint atIndex:1];
+}
+
+- (void)setupContentContainer {
+    contentContainer = [[UIView alloc] initWithFrame:self.bounds];
+    contentContainer.alpha = 0;
+    contentContainer.userInteractionEnabled = NO;
+    [self addSubview:contentContainer];
+}
+
 - (void)setupLabels {
 	label = [[UILabel alloc] initWithFrame:self.bounds];
 	label.adjustsFontSizeToFitWidth = NO;
@@ -480,7 +534,7 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 	label.textColor = self.labelColor;
 	label.font = self.labelFont;
 	label.text = self.labelText;
-	[self addSubview:label];
+	[contentContainer addSubview:label];
 	
 	detailsLabel = [[UILabel alloc] initWithFrame:self.bounds];
 	detailsLabel.font = self.detailsLabelFont;
@@ -492,7 +546,7 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 	detailsLabel.numberOfLines = 0;
 	detailsLabel.font = self.detailsLabelFont;
 	detailsLabel.text = self.detailsLabelText;
-	[self addSubview:detailsLabel];
+	[contentContainer addSubview:detailsLabel];
 }
 
 - (void)updateIndicators {
@@ -505,23 +559,23 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		[indicator removeFromSuperview];
 		UIActivityIndicatorView *activityIndicator = MB_AUTORELEASE([[UIActivityIndicatorView alloc]
 			initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge]);
-		MB_IF_IOS7_OR_GREATER(activityIndicator.color = [UIColor grayColor];)
+		MB_IF_IOS7_OR_GREATER(activityIndicator.color = iOS7contentTint;)
 		self.indicator = activityIndicator;        
 		[(UIActivityIndicatorView *)activityIndicator startAnimating];
-		[self addSubview:activityIndicator];
+		[contentContainer addSubview:activityIndicator];
 	}
 	else if (mode == MBProgressHUDModeDeterminateHorizontalBar) {
 		// Update to bar determinate indicator
 		[indicator removeFromSuperview];
         self.indicator = MB_AUTORELEASE([[MBBarProgressView alloc] init]);
-		[self addSubview:indicator];
+		[contentContainer addSubview:indicator];
 	}
 	else if (mode == MBProgressHUDModeDeterminate || mode == MBProgressHUDModeAnnularDeterminate) {
 		if (!isRoundIndicator) {
 			// Update to determinante indicator
 			[indicator removeFromSuperview];
 			self.indicator = MB_AUTORELEASE([[MBRoundProgressView alloc] init]);
-			[self addSubview:indicator];
+			[contentContainer addSubview:indicator];
 		}
 		if (mode == MBProgressHUDModeAnnularDeterminate) {
 			[(MBRoundProgressView *)indicator setAnnular:YES];
@@ -531,7 +585,7 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		// Update custom view indicator
 		[indicator removeFromSuperview];
 		self.indicator = customView;
-		[self addSubview:indicator];
+		[contentContainer addSubview:indicator];
 	} else if (mode == MBProgressHUDModeText) {
 		[indicator removeFromSuperview];
 		self.indicator = nil;
@@ -605,7 +659,7 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 	detailsLabelF.size = detailsLabelSize;
 	detailsLabel.frame = detailsLabelF;
 	
-	// Enforce minsize and quare rules
+	// Enforce minsize and square rules
 	if (square) {
 		CGFloat max = MAX(totalSize.width, totalSize.height);
 		if (max <= bounds.size.width - 2 * margin) {
@@ -623,64 +677,14 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 	}
 	
 	self.size = totalSize;
-}
 
-#pragma mark BG Drawing
-
-- (void)drawRect:(CGRect)rect {
-	
-	CGContextRef context = UIGraphicsGetCurrentContext();
-	UIGraphicsPushContext(context);
-
-	if (self.dimBackground) {
-		//Gradient colours
-		size_t gradLocationsNum = 2;
-		CGFloat gradLocations[2] = {0.0f, 1.0f};
-		CGFloat alphaCenter = 0.f;
-		MB_IF_IOS7_OR_GREATER(alphaCenter = .2f;)
-		CGFloat alphaEdge = 0.75f;
-		MB_IF_IOS7_OR_GREATER(alphaEdge = .2f;)
-		CGFloat gradColors[8] = {0.0f,0.0f,0.0f,alphaCenter,0.0f,0.0f,0.0f,alphaEdge};
-		CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-		CGGradientRef gradient = CGGradientCreateWithColorComponents(colorSpace, gradColors, gradLocations, gradLocationsNum);
-		CGColorSpaceRelease(colorSpace);
-		//Gradient center
-		CGPoint gradCenter= CGPointMake(self.bounds.size.width/2, self.bounds.size.height/2);
-		//Gradient radius
-		float gradRadius = MIN(self.bounds.size.width , self.bounds.size.height) ;
-		//Gradient draw
-		CGContextDrawRadialGradient (context, gradient, gradCenter,
-									 0, gradCenter, gradRadius,
-									 kCGGradientDrawsAfterEndLocation);
-		CGGradientRelease(gradient);
-	}
-
-    // Set background rect color
-    if (self.color) {
-        CGContextSetFillColorWithColor(context, self.color.CGColor);
-    } else {
-        CGContextSetGrayFillColor(context, 0.0f, self.opacity);
-		CGFloat gray = 0.f;
-		MB_IF_IOS7_OR_GREATER(gray = 1.f;)
-		CGContextSetGrayFillColor(context, gray, self.opacity);
-    }
-	
-	// Center HUD
-	CGRect allRect = self.bounds;
+    // Center HUD
+    CGRect allRect = self.bounds;
 	// Draw rounded HUD backgroud rect
 	CGRect boxRect = CGRectMake(roundf((allRect.size.width - size.width) / 2) + self.xOffset,
 								roundf((allRect.size.height - size.height) / 2) + self.yOffset, size.width, size.height);
-	float radius = self.cornerRadius;
-	CGContextBeginPath(context);
-	CGContextMoveToPoint(context, CGRectGetMinX(boxRect) + radius, CGRectGetMinY(boxRect));
-	CGContextAddArc(context, CGRectGetMaxX(boxRect) - radius, CGRectGetMinY(boxRect) + radius, radius, 3 * (float)M_PI / 2, 0, 0);
-	CGContextAddArc(context, CGRectGetMaxX(boxRect) - radius, CGRectGetMaxY(boxRect) - radius, radius, 0, (float)M_PI / 2, 0);
-	CGContextAddArc(context, CGRectGetMinX(boxRect) + radius, CGRectGetMaxY(boxRect) - radius, radius, (float)M_PI / 2, (float)M_PI, 0);
-	CGContextAddArc(context, CGRectGetMinX(boxRect) + radius, CGRectGetMinY(boxRect) + radius, radius, (float)M_PI, 3 * (float)M_PI / 2, 0);
-	CGContextClosePath(context);
-	CGContextFillPath(context);
-
-	UIGraphicsPopContext();
+    blurryBackground.frame = boxRect;
+    blurryBackgroundTint.frame = blurryBackground.bounds;
 }
 
 #pragma mark - KVO
@@ -790,6 +794,32 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 
 @end
 
+@implementation DimmedBackground
+
+- (void)drawRect:(CGRect)rect {
+    //Gradient colours
+    size_t gradLocationsNum = 2;
+    CGFloat gradLocations[2] = {0.0f, 1.0f};
+    CGFloat alphaCenter = 0.f;
+    MB_IF_IOS7_OR_GREATER(alphaCenter = .2f;)
+    CGFloat alphaEdge = 0.75f;
+    MB_IF_IOS7_OR_GREATER(alphaEdge = .2f;)
+    CGFloat gradColors[8] = {0.0f,0.0f,0.0f,alphaCenter,0.0f,0.0f,0.0f,alphaEdge};
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGGradientRef gradient = CGGradientCreateWithColorComponents(colorSpace, gradColors, gradLocations, gradLocationsNum);
+    CGColorSpaceRelease(colorSpace);
+    //Gradient center
+    CGPoint gradCenter= CGPointMake(self.bounds.size.width/2, self.bounds.size.height/2);
+    //Gradient radius
+    CGFloat gradRadius = MIN(self.bounds.size.width , self.bounds.size.height) ;
+    //Gradient draw
+    CGContextDrawRadialGradient (UIGraphicsGetCurrentContext(), gradient, gradCenter,
+                                 0, gradCenter, gradRadius,
+                                 kCGGradientDrawsAfterEndLocation);
+    CGGradientRelease(gradient);
+}
+
+@end
 
 @implementation MBRoundProgressView
 
@@ -807,9 +837,9 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
 		_progress = 0.f;
 		_annular = NO;
 		MB_IF_PRE_IOS7(_progressTintColor = [[UIColor alloc] initWithWhite:1.f alpha:1.f];)
-		MB_IF_IOS7_OR_GREATER(_progressTintColor = (MB_RETAIN([UIColor grayColor]));)
+		MB_IF_IOS7_OR_GREATER(_progressTintColor = (MB_RETAIN(iOS7contentTint));)
 		MB_IF_PRE_IOS7(_backgroundTintColor = [[UIColor alloc] initWithWhite:1.f alpha:.1f];)
-		MB_IF_IOS7_OR_GREATER(_backgroundTintColor = MB_RETAIN([[UIColor grayColor] colorWithAlphaComponent:0.2]);)
+		MB_IF_IOS7_OR_GREATER(_backgroundTintColor = MB_RETAIN([UIColor clearColor]);)
 		[self registerForKVO];
 	}
 	return self;
@@ -911,9 +941,9 @@ static const CGFloat kDetailsLabelFontSize = 12.f;
     if (self) {
 		_progress = 0.f;
 		MB_IF_PRE_IOS7(_lineColor = MB_RETAIN([UIColor whiteColor]);)
-		MB_IF_IOS7_OR_GREATER(_lineColor = MB_RETAIN([UIColor grayColor]);)
+		MB_IF_IOS7_OR_GREATER(_lineColor = MB_RETAIN(iOS7contentTint);)
 		MB_IF_PRE_IOS7(_progressColor = MB_RETAIN([UIColor whiteColor]);)
-		MB_IF_IOS7_OR_GREATER(_progressColor = MB_RETAIN([UIColor grayColor]);)
+		MB_IF_IOS7_OR_GREATER(_progressColor = MB_RETAIN(iOS7contentTint);)
 		_progressRemainingColor = MB_RETAIN([UIColor clearColor]);
 		self.backgroundColor = [UIColor clearColor];
 		self.opaque = NO;
